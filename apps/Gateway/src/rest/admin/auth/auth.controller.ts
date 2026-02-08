@@ -1,0 +1,93 @@
+import {
+  Body,
+  Controller,
+  Get,
+  Post,
+  Req,
+  Res,
+  UseFilters,
+  UseGuards,
+  UseInterceptors,
+} from '@nestjs/common';
+import {
+  ApiBadRequestResponse,
+  ApiCookieAuth,
+  ApiForbiddenResponse,
+  ApiOperation,
+  ApiTags,
+  ApiUnauthorizedResponse,
+  ApiUnsupportedMediaTypeResponse,
+} from '@nestjs/swagger';
+import { AdminAuthGuard } from './auth.guard';
+
+import { HttpExceptionFilter } from 'src/response/httpException.filter';
+import { AdminAuthService } from './auth.service';
+import {
+  AdminSignInInputDto,
+  GetAdminProfileOutputDto,
+} from 'src/dto/admin/admin.dto';
+import type { Response } from 'express';
+import type { RequestWithUserData } from 'src/dto/public.dto';
+import { ResponseInterceptor } from 'src/response/response.intercptors';
+
+@ApiTags('Admin: Auth')
+@Controller('auth')
+@ApiBadRequestResponse({ description: 'Bad Request | Bad Inputs' })
+@ApiUnauthorizedResponse({ description: 'Session is expired | Unauthorized' })
+@ApiForbiddenResponse({
+  description: 'Permission denied | No Access | Not Subscribed',
+})
+@ApiUnsupportedMediaTypeResponse({
+  description: 'Content|Context format is not supported or invalid',
+})
+@UseFilters(HttpExceptionFilter)
+@UseInterceptors(ResponseInterceptor)
+export class AdminAuthController {
+  constructor(private readonly authService: AdminAuthService) {}
+
+  @Post('signin')
+  @ApiOperation({
+    summary: 'Signin to panel as admin by username and password',
+  })
+  async signIn(
+    @Body() body: AdminSignInInputDto,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<GetAdminProfileOutputDto> {
+    const signInData = await this.authService.signIn(body);
+    const tokenData = signInData.tokenData;
+    res.cookie(tokenData.name, tokenData.token, {
+      maxAge: tokenData.ttl,
+      httpOnly: true,
+    });
+    delete signInData.tokenData;
+    return signInData;
+  }
+  @Get('profile')
+  @UseGuards(AdminAuthGuard)
+  @ApiCookieAuth()
+  @ApiOperation({ summary: 'Get admin profile (guarded)' })
+  async getProfile(
+    @Req() req: RequestWithUserData,
+  ): Promise<GetAdminProfileOutputDto> {
+    return {
+      userType: 'ADMIN',
+      profile: req.acc_profile,
+      session: req.acc_session,
+    };
+  }
+
+  @Post('signout')
+  @ApiOperation({ summary: 'Logout admin' })
+  async signOut(
+    @Req() req: RequestWithUserData,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const session = req.acc_session;
+    if (!session) throw new Error('No session found for logout');
+
+    await this.authService.signOut(session);
+    res.clearCookie('auth_admin', { path: '/' });
+
+    return { success: true };
+  }
+}
